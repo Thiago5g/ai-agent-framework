@@ -1,50 +1,49 @@
 /**
  * Example: Weather Agent
  *
- * A simple ReAct agent that can look up weather information
- * and answer questions about it.
+ * Demonstrates a ReAct agent with tools using the FakeProvider.
+ * Runs completely offline — no API key needed.
  *
  * Usage:
  *   npx tsx examples/weather-agent.ts
+ *
+ * To use OpenAI instead:
+ *   OPENAI_API_KEY=sk-... npx tsx examples/weather-agent.ts --openai
  */
 
-import { ReActAgent, Tool } from '../src/index.js';
+import { ReActAgent, Tool, FakeProvider, OpenAIProvider, BufferMemory } from '../src/index.js';
 import { z } from 'zod';
 
-// --- Define Tools ---
+// ─── Define Tools ────────────────────────────────────────
 
 const getWeather = Tool.create({
   name: 'get_weather',
-  description: 'Get the current weather for a city. Returns temperature in Celsius and conditions.',
+  description: 'Get the current weather for a city. Returns temperature and conditions.',
   input: z.object({
-    city: z.string().describe('The city name, e.g. "São Paulo"'),
-    country: z.string().optional().describe('ISO country code, e.g. "BR"'),
+    city: z.string().describe('City name'),
   }),
   output: z.object({
     city: z.string(),
     temperature: z.number(),
-    feelsLike: z.number(),
     condition: z.string(),
     humidity: z.number(),
   }),
-  execute: async ({ city, country }) => {
-    // In production, call a real weather API
-    console.log(`🌍 Fetching weather for ${city}${country ? `, ${country}` : ''}...`);
-
-    // Simulated response
-    return {
-      city,
-      temperature: 24,
-      feelsLike: 26,
-      condition: 'Partly cloudy',
-      humidity: 72,
+  execute: async ({ city }) => {
+    // Simulated weather data
+    const data: Record<string, { temperature: number; condition: string; humidity: number }> = {
+      'São Paulo': { temperature: 24, condition: 'Partly cloudy', humidity: 72 },
+      'New York': { temperature: 18, condition: 'Sunny', humidity: 45 },
+      'London': { temperature: 12, condition: 'Rainy', humidity: 88 },
     };
+
+    const weather = data[city] ?? { temperature: 20, condition: 'Unknown', humidity: 50 };
+    return { city, ...weather };
   },
 });
 
 const convertTemperature = Tool.create({
   name: 'convert_temperature',
-  description: 'Convert a temperature between Celsius and Fahrenheit',
+  description: 'Convert temperature between Celsius and Fahrenheit',
   input: z.object({
     value: z.number(),
     from: z.enum(['celsius', 'fahrenheit']),
@@ -56,35 +55,54 @@ const convertTemperature = Tool.create({
   }),
   execute: async ({ value, from }) => {
     const converted = from === 'celsius' ? (value * 9) / 5 + 32 : ((value - 32) * 5) / 9;
-    const unit = from === 'celsius' ? 'fahrenheit' : 'celsius';
-    return { original: value, converted: Math.round(converted * 10) / 10, unit };
+    return {
+      original: value,
+      converted: Math.round(converted * 10) / 10,
+      unit: from === 'celsius' ? 'fahrenheit' : 'celsius',
+    };
   },
 });
 
-// --- Create Agent ---
+// ─── Select Provider ─────────────────────────────────────
 
-// NOTE: Replace with your actual LLM provider
-// import { OpenAIProvider } from '../src/providers/openai.provider.js';
-// const provider = new OpenAIProvider({ model: 'gpt-4o', apiKey: process.env.OPENAI_API_KEY });
+const useOpenAI = process.argv.includes('--openai');
+const provider = useOpenAI
+  ? new OpenAIProvider({ model: 'gpt-4o-mini' })
+  : new FakeProvider({ defaultBehavior: 'cycle' });
 
-// For this example, we'll show the structure only
-console.log('🤖 Weather Agent Example');
-console.log('========================');
-console.log('');
-console.log('To run this example, configure an LLM provider:');
-console.log('');
-console.log('  const agent = new ReActAgent({');
-console.log("    name: 'WeatherBot',");
-console.log('    provider: new OpenAIProvider({ model: "gpt-4o" }),');
-console.log('    tools: [getWeather, convertTemperature],');
-console.log("    systemPrompt: 'You are a helpful weather assistant.',");
-console.log('  });');
-console.log('');
-console.log('  const result = await agent.run("What\\'s the weather in São Paulo in Fahrenheit?");');
-console.log('  console.log(result.output);');
-console.log('  console.log(result.trace);');
+if (useOpenAI) {
+  console.log('🌐 Using OpenAI provider (requires OPENAI_API_KEY)\n');
+} else {
+  console.log('🧪 Using FakeProvider (deterministic, no API key needed)\n');
+}
 
-// Show the tool schemas that would be sent to the LLM
-console.log('\n📋 Registered tool schemas:');
-console.log(JSON.stringify(getWeather.toFunctionSchema(), null, 2));
-console.log(JSON.stringify(convertTemperature.toFunctionSchema(), null, 2));
+// ─── Create Agent ────────────────────────────────────────
+
+const agent = new ReActAgent({
+  name: 'WeatherBot',
+  provider,
+  tools: [getWeather, convertTemperature],
+  systemPrompt: 'You are a helpful weather assistant. Use the available tools to answer questions about weather.',
+  maxIterations: 5,
+  memory: new BufferMemory({ maxMessages: 10 }),
+});
+
+// ─── Run Agent ───────────────────────────────────────────
+
+const question = 'What is the weather in São Paulo?';
+console.log(`❓ Question: ${question}\n`);
+
+const result = await agent.run(question);
+
+console.log(`💡 Answer: ${result.output}\n`);
+console.log('📊 Execution Trace:');
+console.log(`   Iterations: ${result.trace.metrics.iterations}`);
+console.log(`   Tool calls: ${result.trace.metrics.toolCalls}`);
+console.log(`   Total tokens: ${result.trace.metrics.totalTokens}`);
+console.log(`   Latency: ${result.trace.metrics.latencyMs}ms\n`);
+
+console.log('📝 Steps:');
+for (const step of result.trace.steps) {
+  const preview = step.content.length > 80 ? step.content.slice(0, 80) + '...' : step.content;
+  console.log(`   [${step.type}] ${preview}`);
+}

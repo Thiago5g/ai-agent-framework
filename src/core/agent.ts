@@ -1,6 +1,6 @@
 import type { LLMProvider, Message, ChatResponse } from './provider.js';
 import type { Tool } from './tool.js';
-import type { Memory } from '../memory/buffer.memory.js';
+import type { Memory } from '../memory/types.js';
 
 export interface AgentConfig {
   name: string;
